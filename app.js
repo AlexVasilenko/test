@@ -1,3 +1,8 @@
+// fix me
+let currentQueue = [];
+const paralelRequestCount = 3;
+let findResult = false;
+
 const generatePromises = (names) => {
    return names.map((name) => JSONP(name));
 }
@@ -18,13 +23,13 @@ const resultData = {
   }
 };
 
-const findInResponseText = (newTexts, findName) => {
+const findInResponseText = (newTexts, findName, path) => {
     let find = false;
   for (let value of newTexts) {
-      const findIntoText = value.text.find((name) => findName === name);
+      const findIntoText = findName === value;
       if (findIntoText) {
-          value.path.push(findName);
-          find = value.path;
+          path.push(findName);
+          find = path;
           break;
       }
   }
@@ -32,48 +37,69 @@ const findInResponseText = (newTexts, findName) => {
   return find;
 }
 
-const generateNewPathForNewNames = (names, startName) => {
+const generateNewPathForNewNames = (names, startName, path) => {
     const processingTitles = [];
     const newNames = [];
 
-    for (let value of names) {
-        for (let i = 0; value.text.length > i; i++) {
-            const findInProcessing = processingTitles.find((item) => item.name === value.text[i]);
-            if (!findInProcessing && value.text[i] !== startName) {
+        for (let i = 0; names.length > i; i++) {
+            const findInProcessing = processingTitles.find((item) => item.name === names[i]);
+            if (!findInProcessing && names[i] !== startName) {
                 processingTitles.push({
-                    name: value.text[i],
-                    path: [...value.path, value.text[i]]
+                    id: Math.random(),
+                    name: names[i],
+                    path: [...path, names[i]]
                 });
             }
         }
-    }
 
     return processingTitles;
 }
 
 const getResponse = (resolve, data) => {
-  const allTexts = data.map((item) => {
-      item.text = parseText(item.text);
-      return item;
-  });
+  const removeIndex = currentQueue.findIndex(item => item.id === data.id);
+  currentQueue.splice(removeIndex, 1);
 
-  const find = findInResponseText(allTexts, resultData.findName);
+  const allTexts = parseText(data.text);
+  const find = findInResponseText(allTexts, resultData.findName, data.path);
   
-  const processingTitles = generateNewPathForNewNames(allTexts, resultData.startName);
+  const processingTitles = generateNewPathForNewNames(allTexts, resultData.startName, data.path);
+  if (data.path.length < 3) {
+      currentQueue = [...currentQueue, ...processingTitles];
+  }
   if (find) {
     resolve(find);
-  } else {
-    const newPromises = generatePromises(processingTitles);
-
-    if (resultData.currentLevel !== 2) {
-        // не нравиться привязывать но не мойму как избавиться от этого
-      Promise.all(newPromises).then(getResponse.bind(this, resolve));
-    } else {
-        resolve(null);
-    }
-
-    resultData.currentLevel++;
+    currentQueue.length = 0;
+    findResult = true;
   }
+  if (!findResult) {
+    checkRunNextRequest(data, resolve);
+  }
+}
+
+const checkRunNextRequest = (data, resolve) => {
+    const findAllPending = currentQueue.filter(item => item.status);
+    let nextData;
+
+    if (findAllPending.length < paralelRequestCount) {
+      const findIndex = currentQueue.findIndex(item => item.path.length === data.path.length && !item.status);
+
+        if (findIndex !== -1) {
+            currentQueue[findIndex].status = 'pending';
+            JSONP(currentQueue[findIndex]).then(r => getResponse(resolve, r));
+            nextData = currentQueue[findIndex];
+        } else {
+                const nextLevelElement = currentQueue.findIndex(item => item.path.length === data.path.length + 1 && !item.status);
+                if (nextLevelElement !== -1) {
+                    currentQueue[nextLevelElement].status = 'pending';
+                    JSONP(currentQueue[nextLevelElement]).then(r => getResponse(resolve, r));
+                    nextData = currentQueue[nextLevelElement];
+                }  
+        }
+
+        if (nextData) {
+            checkRunNextRequest(nextData, resolve);
+        }
+    }
 }
 
 const setResultData = (firstTitle, secondTitle) => {
@@ -88,13 +114,17 @@ const setResultData = (firstTitle, secondTitle) => {
     return resultData.levels[0];
 }
 
-const searchWiki = (firstTitle, secondTitle) => new Promise((resolve, reject) => {
+const searchWiki = async (firstTitle, secondTitle) => new Promise((resolve, reject) => {
 
      const dataForPromise = setResultData(firstTitle, secondTitle);
 
-     let newElements = generatePromises(dataForPromise);
-     
-     Promise.all(newElements).then(getResponse.bind(this, resolve));
+     dataForPromise[0].status = 'pending';
+     dataForPromise[0].id = Math.random();
+
+     currentQueue.push(dataForPromise[0]);
+
+     const firstPromise = JSONP(dataForPromise[0]).then(r => getResponse(resolve, r));
+     checkRunNextRequest(dataForPromise[0]);
   });
 
 const JSONP = (element) => {
