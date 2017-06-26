@@ -2,6 +2,7 @@
 let currentQueue = [];
 const paralelRequestCount = 3;
 let findResult = false;
+const visitedPages = {};
 
 const generatePromises = (names) => {
    return names.map((name) => JSONP(name));
@@ -56,12 +57,16 @@ const generateNewPathForNewNames = (names, startName, path) => {
 }
 
 const getResponse = (resolve, data) => {
+    // удалить выполненный запрос
   const removeIndex = currentQueue.findIndex(item => item.id === data.id);
   currentQueue.splice(removeIndex, 1);
 
+  // распарсить текст
   const allTexts = parseText(data.text);
+  // проверить совпадения
   const find = findInResponseText(allTexts, resultData.findName, data.path);
   
+  // создать новые пути для узлов
   const processingTitles = generateNewPathForNewNames(allTexts, resultData.startName, data.path);
   if (data.path.length < 3) {
       currentQueue = [...currentQueue, ...processingTitles];
@@ -76,27 +81,36 @@ const getResponse = (resolve, data) => {
   }
 }
 
+const skipErrorRequest = (data) => {
+    const removeIndex = currentQueue.findIndex(item => item.id === data.id);
+    currentQueue.splice(removeIndex, 1);
+}
+
 const checkRunNextRequest = (data, resolve) => {
+    // собрать все выполняемые в данный момент запросы
     const findAllPending = currentQueue.filter(item => item.status);
     let nextData;
 
+    // если выполняемых запросов меньше чем максимальное занятие
     if (findAllPending.length < paralelRequestCount) {
+        // найти запрос с текущим уровнем вложенности
       const findIndex = currentQueue.findIndex(item => item.path.length === data.path.length && !item.status);
 
         if (findIndex !== -1) {
-            currentQueue[findIndex].status = 'pending';
-            JSONP(currentQueue[findIndex]).then(r => getResponse(resolve, r));
             nextData = currentQueue[findIndex];
         } else {
-                const nextLevelElement = currentQueue.findIndex(item => item.path.length === data.path.length + 1 && !item.status);
-                if (nextLevelElement !== -1) {
-                    currentQueue[nextLevelElement].status = 'pending';
-                    JSONP(currentQueue[nextLevelElement]).then(r => getResponse(resolve, r));
-                    nextData = currentQueue[nextLevelElement];
-                }  
+            // если нет на текущем уровне найти на следующем
+            const nextLevelElement = currentQueue.findIndex(item => item.path.length === data.path.length + 1 && !item.status);
+            if (nextLevelElement !== -1) {
+                nextData = currentQueue[nextLevelElement];
+            }  
         }
 
-        if (nextData) {
+        // если есть запрос и он еще не выполнялся - выполнить
+        if (nextData && !visitedPages[nextData.name]) {
+            nextData.status = 'pending';
+            JSONP(nextData).then(r => getResponse(resolve, r), err => skipErrorRequest(err));
+            visitedPages[nextData.name] = true;
             checkRunNextRequest(nextData, resolve);
         }
     }
@@ -123,7 +137,7 @@ const searchWiki = async (firstTitle, secondTitle) => new Promise((resolve, reje
 
      currentQueue.push(dataForPromise[0]);
 
-     const firstPromise = JSONP(dataForPromise[0]).then(r => getResponse(resolve, r));
+     const firstPromise = JSONP(dataForPromise[0]).then(r => getResponse(resolve, r), err => skipErrorRequest(err));
      checkRunNextRequest(dataForPromise[0]);
   });
 
